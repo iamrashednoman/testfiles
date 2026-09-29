@@ -1,0 +1,209 @@
+# ═══════════════════════════════════════════════════════════
+# FINESIII screen layouts, navigation codes, and field maps.
+#
+# Port of the screens / navigation / fields / timing / defaults
+# sections of v2 config/settings.yaml. This file is DATA, versioned
+# with the code: a mainframe screen change is an edit here, not a
+# code change. Runtime settings (driver, environment, database,
+# scenario) come from config/*.py + environment variables, never
+# from this file.
+# ═══════════════════════════════════════════════════════════
+
+# ── Application Launch (Windows terminal emulator) ──
+application:
+  executable_path: ""
+  desktop_shortcut: "オンライン業務"
+  shortcut_path: "C:\\Users\\Public\\Desktop\\オンライン業務.lnk"
+  window_title_pattern: "基幹業務"
+  terminal_window_class: "F3BJMD101"   # Fujitsu terminal window class (menu + login share it)
+  launch_timeout: 30
+  run_as_admin: true   # open the shortcut as administrator (right-click > Run as administrator); the bot must run elevated too
+  # "オンライン業務" (Online Business) is the FINESIII launcher shortcut.
+  # It lives on the Public desktop (C:\Users\Public\Desktop), not the
+  # user desktop — hence the explicit shortcut_path. Leave
+  # executable_path blank so the bot launches via the shortcut.
+
+# ── Credential env-var names (values come from the environment) ──
+credentials:
+  method: environment
+  env_vars:
+    affiliation_code: FINESIII_AFFILIATION_CODE
+    application_id: FINESIII_APPLICATION_ID
+    password: FINESIII_PASSWORD
+  keyring_service: "finesiii_rpa"
+
+# ── Test Account (dev environment / simulator fallback only) ──
+test_account:
+  affiliation_code: "03325"
+  staff_code: "12N3940"
+  password: "TEST0000"
+
+# ── Screen Definitions ──
+screens:
+  core_business_menu:
+    name: "Core Business Menu (基幹業務メニュー)"
+    identifiers:
+      - "基幹業務"
+      - "端末業務選択"
+      - "Z1966"
+    timeout: 15
+
+  finesiii_login:
+    name: "FINESIII Login Screen"
+    identifiers:
+      - "INFORMATION"
+      - "NETWORK"
+      - "EXTENSIBLE"
+      - "SYSTEM"
+      - "所属コード"
+      - "担当者コード"
+      - "パスワード"
+      - "P200HAAPROC"
+    timeout: 20
+
+  business_menu:
+    name: "FINESIII Business Menu (業務MENU)"
+    identifiers:
+      - "FINESⅢ"
+      - "業務MENU"
+      - "業務ＮＯ"
+    timeout: 15
+
+  account_management:
+    name: "Task 0903 Account Management (パスワードDBの更新と追加)"
+    identifiers:
+      - "00903"
+      - "パスワードDBの更新と追加"
+      - "処理確認"
+    timeout: 15
+
+  print_screen:
+    name: "Print Output Screen (用紙セット)"
+    identifiers:
+      - "下記の用紙をセットして下さい"
+      - "用紙コード"
+      - "帳票名称"
+    timeout: 15
+
+  print_complete:
+    name: "Print Complete Screen (プリント済)"
+    identifiers:
+      - "プリント済"
+      - "用紙コード"
+    timeout: 15
+
+# ── Navigation Sequence ──
+navigation:
+  core_menu_to_finesiii: "10"
+  login_window_title: "FINES"   # title of the separate FINESⅢ login window (KANRIP)
+  login_command: "00"
+  business_menu_to_903: "903"
+  confirm_command: "00"
+  submit_command: "70"
+  cancel_command: "99"
+  print_command: "10"
+  exit_command: "99"
+  logout_plain_99_count: 3     # plain 99s in FINESIII before the affiliation-field exit
+  logout_field_clear_count: 8  # legacy clear count (fallback drivers only)
+  logout_backtab_count: 4      # Shift+Tab presses to anchor to the first (affiliation) field
+  affiliation_field_width: 7   # affiliation field width to overtype-clear (e.g. 9903325 = 7)
+  menu_window_title: "基幹業務" # Main Menu window title marker (re-attach target on exit)
+  system_shutdown: "XX"
+
+# ── Field Mapping for Task 0903 ──
+fields:
+  processing_type:
+    fid: "008"
+    field_number: 101
+    description: "Processing Type (1=Unlock, 2=Create, 3=Password Reset, 4=Delete)"
+    max_length: 1
+
+  audit_target:
+    fid: "004"
+    field_number: 104
+    description: "Management Target (1; EMPTY for delete)"
+    max_length: 1
+
+  affiliation_code:
+    fid: "005"
+    field_number: 105
+    description: "Affiliation Code / 所属コード (5 digits, zero-pad if < 5)"
+    max_length: 5
+
+  employee_code:
+    fid: "002"
+    field_number: 106
+    description: "Staff Code / 社員コード (7 chars)"
+    max_length: 7
+
+  new_password:
+    fid: "003"
+    field_number: 107
+    description: "Password (8 chars, first char must be a letter). Create/Reset only."
+    max_length: 8
+
+  processing_date:
+    fid: "006"
+    field_number: 108
+    description: "Processing Date in YYMMDD format (e.g., 260603)"
+    max_length: 6
+
+# ── Processing Type Codes ──
+processing_types:
+  unlock: "1"
+  create: "2"
+  password_reset: "3"
+  delete: "4"
+
+# ── Defaults ──
+defaults:
+  initial_password: "FUJI@33F"
+  # Password rules: 8 chars, first char must be a letter,
+  # mix of letters/numbers/symbols
+
+# ── Timing & Pacing ──
+timing:
+  keystroke_delay: 0.15
+  post_entry_delay: 2.0
+  field_entry_delay: 0.3
+  inter_transaction_delay: 10.0
+  max_entries_per_session: 2
+
+# ── Evidence capture points ──
+# Approved fix: v2 omitted confirmation_screen, confirmation_mismatch,
+# already_deleted_screen, and login_failed from this list, so the exact
+# screens QA needs evidence for were never saved. The list below covers
+# every capture() call site in the workflows and navigator.
+evidence:
+  capture_points:
+    - application_launched
+    - core_menu_loaded
+    - menu_selection_entered        # "10" typed, before Enter (both menus)
+    - menu_2_loaded                 # second menu screen (7802) on arrival
+    - login_screen_loaded
+    - login_credentials_entered     # credentials filled, before login submit
+    - login_successful
+    - login_failed
+    - business_menu_loaded
+    - task_number_entered           # "903" typed, before Enter
+    - did903_loaded
+    - data_entered
+    - confirm_command_entered       # "00" typed on the filled table
+    - confirmation_screen
+    - confirmation_mismatch
+    - confirmation_unverifiable     # body unreadable, readable one required
+    - already_deleted_screen
+    - commit_command_entered        # "70" typed on the confirmation
+    - submission_result
+    - error_screen
+    - error_detected              # catalogue rule fired — the error itself
+    - error_recovery_entered      # the bot's reaction, mid-flight
+    - error_recovery_complete     # state after the recovery action
+    - print_screen_loaded
+    - print_complete
+    - logout_step_entered           # each '99' of the logout walk-back
+    - logout_login_screen           # login screen before the exit walk
+    - logout_menu_returned          # menu window after FINESIII closed
+    - logout_shutdown_entered       # 'XX' typed on the menu window
+    - logout_complete
+  format: png
