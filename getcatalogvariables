@@ -1,0 +1,146 @@
+import requests
+from requests.auth import HTTPBasicAuth
+
+# ==============================================================
+# CONFIGURATION
+# ==============================================================
+SNOW_INSTANCE = "your_instance_name"  # e.g., "dev12345"
+SNOW_USERNAME = "your_api_username"
+SNOW_PASSWORD = "your_api_password"
+
+# Target ticket (Can be the ticket Number or the 32-character sys_id)
+SCTASK_IDENTIFIER = "SCTASK0010001"
+
+BASE_URL = f"https://{SNOW_INSTANCE}.service-now.com/api/now/table"
+AUTH = HTTPBasicAuth(SNOW_USERNAME, SNOW_PASSWORD)
+HEADERS = {
+    "Accept": "application/json",
+    "Content-Type": "application/json"
+}
+
+
+# ==============================================================
+# 1. RESOLVE SCTASK & GET PARENT RITM SYS_ID
+# ==============================================================
+def get_sctask_context(identifier):
+    """Fetches the SCTASK to extract its number, sys_id, and parent RITM sys_id."""
+    is_sys_id = len(identifier) == 32 and identifier.isalnum()
+    
+    if is_sys_id:
+        url = f"{BASE_URL}/sc_task/{identifier}"
+        params = {"sysparm_fields": "sys_id,number,short_description,request_item"}
+    else:
+        url = f"{BASE_URL}/sc_task"
+        params = {
+            "sysparm_query": f"number={identifier}",
+            "sysparm_fields": "sys_id,number,short_description,request_item",
+            "sysparm_limit": 1
+        }
+
+    res = requests.get(url, auth=AUTH, headers=HEADERS, params=params, timeout=15)
+    if res.status_code != 200:
+        print(f"Error fetching task [{res.status_code}]: {res.text}")
+        return None
+
+    data = res.json().get("result")
+    if isinstance(data, list):
+        return data[0] if data else None
+    return data
+
+
+# ==============================================================
+# 2. FETCH ALL CATALOG VARIABLES VIA sc_item_option_mtom
+# ==============================================================
+def fetch_catalog_variables(ritm_sys_id):
+    """
+    Queries sc_item_option_mtom to extract variable question labels,
+    internal names, stored values, and display values.
+    """
+    url = f"{BASE_URL}/sc_item_option_mtom"
+    
+    # Dot-walk to question definition (item_option_new) and stored answer (sc_item_option)
+    fields = (
+        "sc_item_option.item_option_new.question_text,"   # UI Label (e.g. "Select Laptop Model")
+        "sc_item_option.item_option_new.name,"            # Internal Name (e.g. "laptop_model")
+        "sc_item_option.item_option_new.type,"            # Variable Type (e.g. Reference, Choice, String)
+        "sc_item_option.value"                            # Raw / Display Value
+    )
+    
+    params = {
+        "sysparm_query": f"request_item={ritm_sys_id}^ORDERBYsc_item_option.item_option_new.order",
+        "sysparm_fields": fields,
+        "sysparm_display_value": "all"
+    }
+
+    res = requests.get(url, auth=AUTH, headers=HEADERS, params=params, timeout=20)
+    if res.status_code != 200:
+        print(f"Error fetching variables [{res.status_code}]: {res.text}")
+        return []
+
+    records = res.json().get("result", [])
+    parsed_variables = []
+
+    for item in records:
+        # Extract question details
+        label = item.get("sc_item_option.item_option_new.question_text", {}).get("display_value", "")
+        tech_name = item.get("sc_item_option.item_option_new.name", {}).get("display_value", "")
+        var_type = item.get("sc_item_option.item_option_new.type", {}).get("display_value", "")
+        
+        # Extract value details
+        val_obj = item.get("sc_item_option.value", {})
+        raw_value = val_obj.get("value", "")
+        display_val = val_obj.get("display_value", "")
+
+        # Fallback if label is missing
+        if not label:
+            label = tech_name
+
+        parsed_variables.append({
+            "label": label,
+            "name": tech_name,
+            "type": var_type,
+            "raw_value": raw_value,
+            "display_value": display_val
+        })
+
+    return parsed_variables
+
+
+# ==============================================================
+# MAIN EXECUTION
+# ==============================================================
+if __name__ == "__main__":
+    print(f"Searching for task: {SCTASK_IDENTIFIER}...")
+    task = get_sctask_context(SCTASK_IDENTIFIER)
+
+    if not task:
+        print(f"SCTASK '{SCTASK_IDENTIFIER}' not found or inaccessible.")
+        exit(1)
+
+    task_number = task.get("number")
+    task_desc = task.get("short_description")
+    parent_ritm = task.get("request_item", {})
+
+    # Extract parent RITM sys_id
+    ritm_sys_id = parent_ritm.get("value") if isinstance(parent_ritm, dict) else parent_ritm
+
+    print(f"\nTask Number:       {task_number}")
+    print(f"Short Description: {task_desc}")
+    print(f"Parent RITM Sys ID: {ritm_sys_id}")
+
+    if not ritm_sys_id:
+        print("\nNotice: This SCTASK is not linked to a parent RITM (standalone task). No catalog variables exist.")
+        exit(0)
+
+    print("\nRetrieving catalog variables...")
+    variables = fetch_catalog_variables(ritm_sys_id)
+
+    if not variables:
+        print("No variables found on the parent Requested Item.")
+    else:
+        print(f"\nFound {len(variables)} catalog variables:\n")
+        print(f"{'Label (Question)':<35} | {'Technical Name':<20} | {'Value (Display / Raw)':<30}")
+        print("-" * 92)
+        for var in variables:
+            display = var["display_value"] if var["display_value"] else var["raw_value"]
+            print(f"{var['label'][:33]:<35} | {var['name'][:18]:<20} | {str(display)[:28]:<30}")
