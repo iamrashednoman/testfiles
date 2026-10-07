@@ -1,144 +1,152 @@
-import os
+import json
 import requests
 from requests.auth import HTTPBasicAuth
 
-# Instance & Credentials configuration
-INSTANCE = os.getenv("SNOW_INSTANCE", "your_instance_name")
-BASE_URL = f"https://{INSTANCE}.service-now.com/api/now/table/sc_task"
+# ==========================================
+# CONFIGURATION VARIABLES
+# ==========================================
+SNOW_INSTANCE = "your_instance_name"  # e.g., "dev12345"
+SNOW_USERNAME = "your_api_username"
+SNOW_PASSWORD = "your_api_password"
 
-USERNAME = os.getenv("SNOW_USERNAME", "your_username")
-PASSWORD = os.getenv("SNOW_PASSWORD", "your_password")
-
-AUTH = HTTPBasicAuth(USERNAME, PASSWORD)
+BASE_URL = f"https://{SNOW_INSTANCE}.service-now.com/api/now/table/sc_task"
+AUTH = HTTPBasicAuth(SNOW_USERNAME, SNOW_PASSWORD)
 HEADERS = {
     "Accept": "application/json",
     "Content-Type": "application/json"
 }
 
-# Standard fields including dot-walk to Requested For and parent item
+# The fields to return in the JSON response
 DEFAULT_FIELDS = (
-    "sys_id,number,short_description,description,state,priority,"
-    "assignment_group,assigned_to,request_item,request_item.request.requested_for"
+    "sys_id,number,short_description,description,state,assignment_group,"
+    "request_item,request_item.request.requested_for"
 )
 
 
-def get_sctask_by_sys_id(sys_id, display_value="all"):
+# ==========================================
+# 1. FETCH SPECIFIC SCTASK
+# ==========================================
+def fetch_specific_sctask(identifier, by_number=False):
     """
-    Fetch a single catalog task record by sys_id.
+    Fetch a single Catalog Task.
+    :param identifier: 32-character sys_id OR ticket number (e.g. 'SCTASK0010025')
+    :param by_number: Set to True if querying by 'number' instead of 'sys_id'
     """
-    url = f"{BASE_URL}/{sys_id}"
-    params = {
-        "sysparm_fields": DEFAULT_FIELDS,
-        "sysparm_display_value": display_value
-    }
-    
-    response = requests.get(url, auth=AUTH, headers=HEADERS, params=params, timeout=15)
-    response.raise_for_status()
-    return response.json().get("result", {})
+    if by_number:
+        # When querying by task number, use query filter
+        params = {
+            "sysparm_query": f"number={identifier}",
+            "sysparm_fields": DEFAULT_FIELDS,
+            "sysparm_display_value": "all",
+            "sysparm_limit": 1
+        }
+        response = requests.get(BASE_URL, auth=AUTH, headers=HEADERS, params=params, timeout=15)
+        if response.status_code == 200:
+            records = response.json().get("result", [])
+            return records[0] if records else None
+        else:
+            print(f"Error [{response.status_code}]: {response.text}")
+            return None
+    else:
+        # Direct sys_id lookup
+        url = f"{BASE_URL}/{identifier}"
+        params = {
+            "sysparm_fields": DEFAULT_FIELDS,
+            "sysparm_display_value": "all"
+        }
+        response = requests.get(url, auth=AUTH, headers=HEADERS, params=params, timeout=15)
+        if response.status_code == 200:
+            return response.json().get("result", {})
+        else:
+            print(f"Error [{response.status_code}]: {response.text}")
+            return None
 
 
-def get_sctask_by_number(ticket_number, display_value="all"):
+# ==========================================
+# 2. FETCH ALL SCTASKS (WITH PAGINATION)
+# ==========================================
+def fetch_all_sctasks(assignment_group_sys_id=None, requested_for_sys_id=None, page_size=100, max_records=None):
     """
-    Fetch a specific task using its human-readable ticket number (e.g. SCTASK0010025).
+    Fetch all catalog tasks matching given criteria using batch pagination.
+    :param assignment_group_sys_id: 32-char sys_id of assignment group (optional)
+    :param requested_for_sys_id: 32-char sys_id of requested_for user (optional)
+    :param page_size: Records per API call (default: 100)
+    :param max_records: Cap total records returned, or None for all
     """
-    params = {
-        "sysparm_query": f"number={ticket_number}",
-        "sysparm_fields": DEFAULT_FIELDS,
-        "sysparm_limit": 1,
-        "sysparm_display_value": display_value
-    }
-    
-    response = requests.get(BASE_URL, auth=AUTH, headers=HEADERS, params=params, timeout=15)
-    response.raise_for_status()
-    results = response.json().get("result", [])
-    return results[0] if results else None
+    query_parts = []
+    if assignment_group_sys_id:
+        query_parts.append(f"assignment_group={assignment_group_sys_id}")
+    if requested_for_sys_id:
+        query_parts.append(f"request_item.request.requested_for={requested_for_sys_id}")
 
+    sysparm_query = "^".join(query_parts) if query_parts else "ORDERBYDESCsys_created_on"
 
-def get_all_sctasks(query="", page_size=100, max_records=None, display_value="all"):
-    """
-    Paginate through all matching catalog tasks using sysparm_offset.
-    
-    :param query: ServiceNow encoded query string (e.g. 'assignment_group=<SYS_ID>^request_item.request.requested_for=<SYS_ID>')
-    :param page_size: Records per HTTP request (batch size)
-    :param max_records: Stop after reaching this count (None = fetch all)
-    :param display_value: 'true', 'false', or 'all'
-    """
-    records = []
+    all_tasks = []
     offset = 0
 
-    while True:
-        # Calculate limit for final batch if max_records is set
-        limit = page_size
-        if max_records and (len(records) + page_size > max_records):
-            limit = max_records - len(records)
+    print(f"Starting query on sc_task with filter: '{sysparm_query}'")
 
+    while True:
         params = {
-            "sysparm_query": query,
+            "sysparm_query": sysparm_query,
             "sysparm_fields": DEFAULT_FIELDS,
-            "sysparm_limit": limit,
-            "sysparm_offset": offset,
-            "sysparm_display_value": display_value
+            "sysparm_display_value": "all",
+            "sysparm_limit": page_size,
+            "sysparm_offset": offset
         }
 
-        print(f"Fetching records (offset={offset}, limit={limit})...")
         response = requests.get(BASE_URL, auth=AUTH, headers=HEADERS, params=params, timeout=20)
-        response.raise_for_status()
-        
+
+        if response.status_code != 200:
+            print(f"Failed to fetch batch at offset {offset}. Status {response.status_code}: {response.text}")
+            break
+
         batch = response.json().get("result", [])
         if not batch:
             break
 
-        records.extend(batch)
-        offset += len(batch)
+        all_tasks.extend(batch)
+        print(f"Fetched {len(batch)} records (Total so far: {len(all_tasks)})")
 
-        # Break condition: last page reached or reached max limit
-        if len(batch) < limit or (max_records and len(records) >= max_records):
+        if max_records and len(all_tasks) >= max_records:
+            all_tasks = all_tasks[:max_records]
             break
 
-    return records
+        if len(batch) < page_size:
+            # End of records
+            break
+
+        offset += page_size
+
+    return all_tasks
 
 
-# =========================================================
-# Execution Example
-# =========================================================
+# ==========================================
+# EXECUTION
+# ==========================================
 if __name__ == "__main__":
-    try:
-        # 1. Fetch a specific ticket by ticket number
-        sample_number = "SCTASK0010001"
-        print(f"\n--- 1. Fetching single task by number: {sample_number} ---")
-        task = get_sctask_by_number(sample_number)
-        if task:
-            num = task.get("number", {}).get("display_value")
-            desc = task.get("short_description", {}).get("display_value")
-            req_for = task.get("request_item.request.requested_for", {}).get("display_value")
-            print(f"Found: {num} | Title: {desc} | Requested For: {req_for}")
-        else:
-            print("No task found with that number.")
+    # --- Example 1: Fetch a specific task by number ---
+    print("--- 1. Fetch Specific Task ---")
+    specific_task = fetch_specific_sctask("SCTASK0010001", by_number=True)
+    if specific_task:
+        print("Ticket Number:", specific_task.get("number", {}).get("display_value"))
+        print("Short Description:", specific_task.get("short_description", {}).get("display_value"))
+        print("Description:", specific_task.get("description", {}).get("display_value"))
+        print("Requested For:", specific_task.get("request_item.request.requested_for", {}).get("display_value"))
+    else:
+        print("Task not found or permission denied.")
 
-        # 2. Fetch all tasks filtered by assignment group and requested for
-        # Replace these placeholders with actual 32-character sys_ids
-        target_group_sys_id = "8a58cc21c611227601070be209fa821e"
-        target_user_sys_id = "46d44a23a9fe19810012d100cca80666"
+    # --- Example 2: Fetch all tasks with filters ---
+    print("\n--- 2. Fetch Filtered Tasks ---")
+    # Leave None to query all records, or supply 32-character sys_ids:
+    TARGET_GROUP_SYS_ID = None  # e.g., "8a58cc21c611227601070be209fa821e"
+    TARGET_USER_SYS_ID = None   # e.g., "46d44a23a9fe19810012d100cca80666"
 
-        encoded_query = (
-            f"assignment_group={target_group_sys_id}"
-            f"^request_item.request.requested_for={target_user_sys_id}"
-        )
+    results = fetch_all_sctasks(
+        assignment_group_sys_id=TARGET_GROUP_SYS_ID,
+        requested_for_sys_id=TARGET_USER_SYS_ID,
+        page_size=50,
+        max_records=100
+    )
 
-        print(f"\n--- 2. Fetching all tasks with query filter ---")
-        filtered_tasks = get_all_sctasks(
-            query=encoded_query,
-            page_size=50,
-            max_records=100
-        )
-
-        print(f"Total tasks retrieved: {len(filtered_tasks)}")
-        for t in filtered_tasks[:5]:
-            t_num = t.get("number", {}).get("display_value")
-            t_state = t.get("state", {}).get("display_value")
-            print(f" - {t_num} (State: {t_state})")
-
-    except requests.exceptions.HTTPError as err:
-        print(f"HTTP Error: {err.response.status_code} - {err.response.text}")
-    except Exception as e:
-        print(f"An error occurred: {e}")
+    print(f"\nRetrieved {len(results)} total SCTASKs.")
