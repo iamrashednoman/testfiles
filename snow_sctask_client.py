@@ -1,109 +1,150 @@
 import requests
 from requests.auth import HTTPBasicAuth
 
-# ==========================================
-# CONFIGURATION VARIABLES
-# ==========================================
+# ==============================================================
+# CONFIGURATION
+# ==============================================================
 SNOW_INSTANCE = "your_instance_name"  # e.g., "dev12345"
-SNOW_USERNAME = "your_api_username"
-SNOW_PASSWORD = "your_api_password"
+SNOW_USERNAME = "your_service_account"
+SNOW_PASSWORD = "your_password"
 
-# Assignment group to filter by (accepts 32-char sys_id or exact group name)
-ASSIGNMENT_GROUP = "Hardware Support"
-
-BASE_URL = f"https://{SNOW_INSTANCE}.service-now.com/api/now/table/sc_task"
+BASE_URL = f"https://{SNOW_INSTANCE}.service-now.com/api/now/table"
 AUTH = HTTPBasicAuth(SNOW_USERNAME, SNOW_PASSWORD)
 HEADERS = {
     "Accept": "application/json",
     "Content-Type": "application/json"
 }
 
-FIELDS = "number,short_description,state,priority,assignment_group,assigned_to,request_item.request.requested_for"
+# Core fulfillment and reference tables required for Catalog Tasks
+TARGET_TABLES = [
+    "sc_task",       # Catalog Task
+    "sc_req_item",   # Requested Item (RITM)
+    "sc_request",    # Request (REQ)
+    "sys_user",      # User Directory (requested_for target)
+    "sys_user_group" # Assignment Groups
+]
 
 
-# ==========================================
-# 1. FETCH ALL SCTASKS FOR THE GROUP
-# ==========================================
-def get_all_sctasks_by_group(group_identifier, limit=100):
-    """
-    Fetch catalog tasks assigned to a specific group.
-    Supports either group sys_id (32 chars) or group display name.
-    """
-    if len(group_identifier) == 32 and group_identifier.isalnum():
-        query = f"assignment_group={group_identifier}"
-    else:
-        query = f"assignment_group.name={group_identifier}"
-
+# ==============================================================
+# 1. TEST DIRECT TABLE READ ACCESS
+# ==============================================================
+def check_table_access(table_name):
+    """Checks HTTP status and record visibility for a single table."""
+    url = f"{BASE_URL}/{table_name}"
     params = {
-        "sysparm_query": f"{query}^ORDERBYDESCsys_created_on",
-        "sysparm_fields": FIELDS,
-        "sysparm_display_value": "all",
-        "sysparm_limit": limit
+        "sysparm_limit": 1,
+        "sysparm_fields": "sys_id"
+    }
+    
+    try:
+        res = requests.get(url, auth=AUTH, headers=HEADERS, params=params, timeout=15)
+    except requests.exceptions.RequestException as e:
+        return {
+            "status": "ERROR",
+            "http_code": None,
+            "can_read": False,
+            "records_visible": False,
+            "details": str(e)
+        }
+
+    if res.status_code == 200:
+        records = res.json().get("result", [])
+        return {
+            "status": "PASS",
+            "http_code": 200,
+            "can_read": True,
+            "records_visible": len(records) > 0,
+            "details": "Table is readable and visible." if len(records) > 0 else "Table readable, but 0 records returned (check Query Business Rules/empty table)."
+        }
+    elif res.status_code == 403:
+        return {
+            "status": "FORBIDDEN",
+            "http_code": 403,
+            "can_read": False,
+            "records_visible": False,
+            "details": "ACL restriction: User lacks read permission or rest_service role."
+        }
+    elif res.status_code == 401:
+        return {
+            "status": "UNAUTHORIZED",
+            "http_code": 401,
+            "can_read": False,
+            "records_visible": False,
+            "details": "Invalid credentials or account locked."
+        }
+    else:
+        return {
+            "status": f"HTTP {res.status_code}",
+            "http_code": res.status_code,
+            "can_read": False,
+            "records_visible": False,
+            "details": res.text
+        }
+
+
+# ==============================================================
+# 2. TEST DOT-WALK READ ACCESS (sc_task -> requested_for)
+# ==============================================================
+def check_dotwalk_access():
+    """Validates if the account can dot-walk across the request chain."""
+    url = f"{BASE_URL}/sc_task"
+    params = {
+        "sysparm_limit": 1,
+        "sysparm_fields": "number,request_item.number,request_item.request.number,request_item.request.requested_for",
+        "sysparm_display_value": "all"
     }
 
-    response = requests.get(BASE_URL, auth=AUTH, headers=HEADERS, params=params, timeout=20)
-    
-    if response.status_code == 200:
-        return response.json().get("result", [])
-    
-    print(f"Error fetching group tasks [{response.status_code}]: {response.text}")
-    return []
+    try:
+        res = requests.get(url, auth=AUTH, headers=HEADERS, params=params, timeout=15)
+        if res.status_code != 200:
+            return False, f"HTTP {res.status_code}: {res.text}"
+
+        records = res.json().get("result", [])
+        if not records:
+            return False, "Query succeeded but returned 0 records to test dot-walking."
+
+        sample = records[0]
+        dotwalk_val = sample.get("request_item.request.requested_for")
+        
+        if dotwalk_val is not None and dotwalk_val != "":
+            return True, f"Successfully resolved dot-walk: {dotwalk_val.get('display_value') if isinstance(dotwalk_val, dict) else dotwalk_val}"
+        else:
+            return False, "Dot-walk field returned null (check sc_request / sys_user read ACLs or task relationships)."
+
+    except requests.exceptions.RequestException as e:
+        return False, str(e)
 
 
-# ==========================================
-# 2. FETCH SPECIFIC SCTASK IN THE GROUP
-# ==========================================
-def get_specific_sctask_in_group(task_number, group_identifier):
-    """
-    Fetch a specific catalog task by ticket number, ensuring it belongs to the group.
-    """
-    if len(group_identifier) == 32 and group_identifier.isalnum():
-        group_filter = f"assignment_group={group_identifier}"
-    else:
-        group_filter = f"assignment_group.name={group_identifier}"
-
-    params = {
-        "sysparm_query": f"number={task_number}^{group_filter}",
-        "sysparm_fields": FIELDS,
-        "sysparm_display_value": "all",
-        "sysparm_limit": 1
-    }
-
-    response = requests.get(BASE_URL, auth=AUTH, headers=HEADERS, params=params, timeout=20)
-
-    if response.status_code == 200:
-        results = response.json().get("result", [])
-        return results[0] if results else None
-
-    print(f"Error fetching specific task [{response.status_code}]: {response.text}")
-    return None
-
-
-# ==========================================
-# USAGE
-# ==========================================
+# ==============================================================
+# MAIN RUNNER
+# ==============================================================
 if __name__ == "__main__":
-    # --- 1. Fetch all tasks for the group ---
-    print(f"Fetching tasks for assignment group: '{ASSIGNMENT_GROUP}'...")
-    tasks = get_all_sctasks_by_group(ASSIGNMENT_GROUP, limit=10)
-    print(f"Found {len(tasks)} tasks:\n")
+    print(f"==================================================")
+    print(f" ServiceNow Permission Audit: '{SNOW_USERNAME}'")
+    print(f" Instance: https://{SNOW_INSTANCE}.service-now.com")
+    print(f"==================================================\n")
 
-    for task in tasks:
-        num = task.get("number", {}).get("display_value")
-        desc = task.get("short_description", {}).get("display_value")
-        req_for = task.get("request_item.request.requested_for", {}).get("display_value")
-        print(f"  [{num}] {desc} (Requested For: {req_for})")
-
-    # --- 2. Fetch a single specific task in the group ---
-    SPECIFIC_TASK_NUMBER = "SCTASK0010001"
-    print(f"\nFetching single task '{SPECIFIC_TASK_NUMBER}' within '{ASSIGNMENT_GROUP}'...")
+    print("[1] Evaluating Direct Table Permissions:")
+    print("-" * 50)
     
-    single_task = get_specific_sctask_in_group(SPECIFIC_TASK_NUMBER, ASSIGNMENT_GROUP)
-    if single_task:
-        print(f"  Number:           {single_task.get('number', {}).get('display_value')}")
-        print(f"  Short Desc:       {single_task.get('short_description', {}).get('display_value')}")
-        print(f"  State:            {single_task.get('state', {}).get('display_value')}")
-        print(f"  Assigned To:      {single_task.get('assigned_to', {}).get('display_value')}")
-        print(f"  Requested For:    {single_task.get('request_item.request.requested_for', {}).get('display_value')}")
+    all_passed = True
+    for table in TARGET_TABLES:
+        result = check_table_access(table)
+        status_symbol = "✔" if result["status"] == "PASS" else "✖"
+        print(f"{status_symbol} Table: {table:<16} | Status: {result['status']:<10} (HTTP {result['http_code']})")
+        print(f"   Note: {result['details']}")
+        if result["status"] != "PASS":
+            all_passed = False
+
+    print("\n[2] Evaluating Dot-Walk Chain (sc_task -> sc_request.requested_for):")
+    print("-" * 50)
+    dw_success, dw_message = check_dotwalk_access()
+    print(f"{'✔' if dw_success else '✖'} Dot-walk status: {'SUCCESS' if dw_success else 'FAILED'}")
+    print(f"   Details: {dw_message}\n")
+
+    print("==================================================")
+    if all_passed and dw_success:
+        print("Verdict: The service account has full read and dot-walk access.")
     else:
-        print(f"  Task '{SPECIFIC_TASK_NUMBER}' not found in group '{ASSIGNMENT_GROUP}'.")
+        print("Verdict: Permission bottlenecks detected. Review the failures above.")
+    print("==================================================")
