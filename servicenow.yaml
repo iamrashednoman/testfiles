@@ -1,0 +1,306 @@
+# ═══════════════════════════════════════════════════════════════
+# ServiceNow Connector — Configuration
+# ═══════════════════════════════════════════════════════════════
+# Secrets are NOT stored here. This file declares the ENV-VAR NAMES
+# (mirrors config/settings.yaml `credentials.env_vars`). Set the actual
+# values as environment variables — see .env.servicenow.example.
+#
+# Field paths below are PLACEHOLDERS. Confirm the real ServiceNow schema
+# with:  python scripts/run_servicenow_connector.py --discover
+# then update `field_mapping` accordingly.
+# ═══════════════════════════════════════════════════════════════
+
+servicenow:
+
+  # ── Secrets come from these environment variables ──
+  env_vars:
+    instance_url:     SNOW_INSTANCE_URL
+    # basic | oauth_password | oauth_client_credentials
+    #   basic                    – the bot account's username + password
+    #   oauth_password           – OAuth "resource owner password" grant:
+    #                              client id + secret AND the bot account
+    #   oauth_client_credentials – OAuth client credentials grant (Washington
+    #                              DC or later, grant enabled on the instance,
+    #                              application user mapped to the registration)
+    auth_method:      SNOW_AUTH_METHOD
+    username:         SNOW_USERNAME
+    password:         SNOW_PASSWORD
+    client_id:        SNOW_CLIENT_ID         # OAuth only
+    client_secret:    SNOW_CLIENT_SECRET     # OAuth only (OS vault)
+    token_url:        SNOW_TOKEN_URL         # optional; default <instance>/oauth_token.do
+    table:            SNOW_TABLE
+    # Ticket filters, each optional (empty = not applied):
+    assigned_to:      SNOW_ASSIGNED_TO      # Bot account: sys_id, user name or name
+    assignment_group: SNOW_ASSIGNMENT_GROUP # sys_id or name
+    requested_for:    SNOW_REQUESTED_FOR    # sys_id or name list
+    requested_for_field: SNOW_REQUESTED_FOR_FIELD
+    # Managed by the console's ServiceNow page (2026-09-26); each
+    # overrides the YAML value when set.
+    assignment_mode:  SNOW_ASSIGNMENT_MODE  # assigned_to | assignment_group
+    open_states:      SNOW_OPEN_STATES      # comma-separated; blank = any active
+    poll_seconds:     SNOW_POLL_SECONDS
+    writeback_enabled: SNOW_WRITEBACK_ENABLED
+    duplicate_window_days: SNOW_DUPLICATE_WINDOW_DAYS
+    # Ticket close-out after the mainframe step
+    close_on_success:         SNOW_CLOSE_ON_SUCCESS
+    close_state:              SNOW_CLOSE_STATE
+    close_comment_provision:  SNOW_CLOSE_COMMENT_PROVISION
+    close_comment_deprovision: SNOW_CLOSE_COMMENT_DEPROVISION
+    review_note_enabled:      SNOW_REVIEW_NOTE_ENABLED
+    review_note:              SNOW_REVIEW_NOTE
+    failure_note_enabled:     SNOW_FAILURE_NOTE_ENABLED
+    failure_note:             SNOW_FAILURE_NOTE
+    unconfirmed_note:         SNOW_UNCONFIRMED_NOTE
+    cancel_note_enabled:      SNOW_CANCEL_NOTE_ENABLED
+    cancel_note:              SNOW_CANCEL_NOTE
+    reject_reassign_group:    SNOW_REJECT_REASSIGN_GROUP
+    # SailPoint tickets (2026-09-28)
+    ticket_format:            SNOW_TICKET_FORMAT
+    var_text:                 SNOW_VAR_TEXT
+    var_account:              SNOW_VAR_ACCOUNT
+    var_employee_id:          SNOW_VAR_EMPLOYEE_ID
+    var_employee:             SNOW_VAR_EMPLOYEE
+    var_instance:             SNOW_VAR_INSTANCE
+    var_application:          SNOW_VAR_APPLICATION
+    var_request_type:         SNOW_VAR_REQUEST_TYPE
+    application_ids:          SNOW_APPLICATION_IDS
+    accepted_instances:       SNOW_ACCEPTED_INSTANCES
+    affiliation_attributes:   SNOW_AFFILIATION_ATTRIBUTES
+    task_text_fields:         SNOW_TASK_TEXT_FIELDS
+    checks:                   SNOW_SAILPOINT_CHECKS
+    words_provision:          SNOW_WORDS_PROVISION
+    words_deprovision:        SNOW_WORDS_DEPROVISION
+    words_certification:      SNOW_WORDS_CERTIFICATION
+    type_termination:         SNOW_TYPE_TERMINATION
+    type_transfer:            SNOW_TYPE_TRANSFER
+    type_account_certification: SNOW_TYPE_ACCOUNT_CERT
+    requester_source:         SNOW_REQUESTER_SOURCE
+    user_lookup_field:        SNOW_USER_LOOKUP_FIELD
+    claim_on_pickup:          SNOW_CLAIM_ON_PICKUP
+    claim_state:              SNOW_CLAIM_STATE
+    close_comment_certification: SNOW_CLOSE_COMMENT_CERTIFICATION
+    reject_note_enabled:      SNOW_REJECT_NOTE_ENABLED
+    reject_note:              SNOW_REJECT_NOTE
+    require_approval:         SNOW_REQUIRE_APPROVAL
+    approval_filter:          SNOW_APPROVAL_FILTER
+
+  # ── Ticket format (2026-09-28) ──
+  #   sailpoint — SailPoint-generated catalog tasks (IAM Access Request):
+  #               the instruction text and the account come from the
+  #               requested item's catalog variables (block below).
+  #   fields    — one request per ticket in separate ticket fields
+  #               (field_mapping below; the earlier format).
+  ticket_format: "sailpoint"
+
+  # ── SailPoint catalog tasks (ticket_format: sailpoint) ──
+  sailpoint:
+    # Catalog variables, matched by their on-screen LABEL or internal
+    # name (not case-sensitive). Several alternatives may be listed.
+    variables:
+      text:         ["Description / Work notes"]
+      account:      ["Account Name"]
+      employee_id:  ["Employee ID"]
+      employee:     ["Employee"]
+      instance:     ["Instance"]
+      application:  ["Application Name"]
+      request_type: ["Request Type"]
+    # The ticket must name one of these application IDs, e.g. "[2565]",
+    # in the Application Name variable or the task description.
+    application_ids: ["2565"]
+    # A filled-in Instance must be one of these; an empty Instance is
+    # accepted (certification tasks carry none).
+    accepted_instances: ["Prod"]
+    # AttributeName values that carry the FINESIII affiliation code.
+    affiliation_attributes: ["所属コード"]
+    # Task fields (internal names) that hold the instruction text when
+    # the catalog variable is empty or cannot be read. Empty = found
+    # automatically: the task field whose text carries the instruction.
+    task_text_fields: []
+    # strict = every check; minimal = only what a run needs (testing).
+    checks: "strict"
+    operation_words:
+      provision:     ["Add", "Create", "Provision", "Provisioning"]
+      deprovision:   ["Remove", "Delete", "Deprovision", "Deprovisioning",
+                      "Termination", "Terminate", "Disable"]
+      # Certification is ALWAYS a removal (client rule).
+      certification: ["Certification", "Certify", "Revoke"]
+    # Request types (process design, 2026-09-28). Words or phrases in
+    # the instruction text, the Request Type variable or the short
+    # description that mark the type; checked in this order. Without a
+    # match the type follows the operation: Add = New Account
+    # Provisioning, Remove = Access Removal. A certification without an
+    # Account Certification phrase is an Entitlement Certification.
+    # Every type except New Account Provisioning only ever REMOVES.
+    request_types:
+      termination:           ["Termination", "Terminate", "Leaver"]
+      transfer:              ["Transfer", "Mover"]
+      account_certification: ["Account Certification", "Account Cert",
+                              "Account Access Review"]
+    # On pickup the task is assigned to the bot account and moved to
+    # this state (sc_task: 2 = Work in Progress).
+    claim_on_pickup: true
+    claim_state: "2"
+
+  # ── Which tickets to pull ──
+  fetch:
+    table: "sc_task"                 # fallback if SNOW_TABLE unset (placeholder)
+    # Ticket filters. Each one is optional: a filled-in value is applied,
+    # an empty one adds no condition. They are entered on the Settings
+    # page (ServiceNow > Ticket selection); the group and Requested For
+    # values in this file are not applied.
+    #   Assignment group  only tickets of that group.
+    #   Bot account       (SNOW_ASSIGNED_TO) with assignment_mode
+    #                       assigned_to       - tickets assigned to it;
+    #                       assignment_group  - tickets unassigned or
+    #                                           assigned to it.
+    #                     Empty = no filter on the assignee. Tickets are
+    #                     assigned to this account (or to the ServiceNow
+    #                     username when empty) before they are queued;
+    #                     a ticket a person has taken is left alone.
+    #   Requested For     only tickets requested for these users, checked
+    #                     by the bot on each ticket in requested_for_field
+    #                     or - empty - in the task's, its request's and
+    #                     its requested item's Requested For.
+    assignment_mode: "assigned_to"
+    assignment_group: ""
+    requested_for: []
+    requested_for_field: ""
+    # Only requests that are approved (process design, 2026-09-28).
+    # "field=value" in the ticket table's terms; for a catalog task the
+    # approval lives on its requested item.
+    require_approval: true
+    approval_filter: "request_item.approval=approved"
+    active_only: true
+    # Raw state values counted as "open". EMPTY (default since 2026-09-26)
+    # = every ticket ServiceNow still treats as active, whatever the
+    # table; a list (e.g. ["1", "2", "-5"] for sc_task) restricts further.
+    open_states: []
+    max_per_poll: 25                 # NEW submissions per poll (flood control)
+    fetch_ceiling: 1000              # rows read per poll, across all pages
+    order_by: "sys_created_on"       # FIFO by creation time
+    display_value: "false"           # raw values → deterministic state matching
+    # Only these columns are requested (perf + least-data). Keep in sync with
+    # field_mapping. Add the real variable/field names after --discover.
+    fields:
+      - "sys_id"
+      - "number"
+      - "state"
+      - "assigned_to"
+      - "assignment_group"
+      - "u_operation"
+      - "u_affiliation_code"
+      - "u_employee_code"
+      # Used by field_mapping below; without them here sysparm_fields
+      # never returns them, so the password and the user's email were
+      # always empty (fixed 2026-09-26).
+      - "u_initial_password"
+      - "u_requester_email"
+      # Compared for the possible-duplicate check (same requester and
+      # same description under different codes).
+      - "short_description"
+      - "description"
+    # query_override: ""             # optional raw sysparm_query (advanced)
+
+  # ── Ticket field PATH → request field (PLACEHOLDER mapping) ──
+  # Dotted paths support nested lookups (e.g. catalog variables); a literal
+  # flat key (e.g. "u_operation") is also tried if nested traversal misses.
+  field_mapping:
+    ticket_number:    "number"
+    operation:        "u_operation"           # expects provision / deprovision
+    affiliation_code: "u_affiliation_code"
+    employee_code:    "u_employee_code"
+    password:         "u_initial_password"    # optional; provision only
+    user_email:       "u_requester_email"     # optional; account-created email
+                                              # to the user (Step 11)
+
+  # ── Description parsing (OFF by default — structured u_* fields above) ──
+  # For instances WITHOUT custom fields, ticket data can travel as
+  # "Label: value" lines inside the description. When enabled, those lines
+  # are extracted into a virtual `parsed` namespace BEFORE mapping, so
+  # field_mapping paths like "parsed.affiliation_code" resolve them.
+  # See config/servicenow_e2e.yaml for a complete working example.
+  description_parsing:
+    enabled: false
+    source_field: "description"
+    # labels:                        # request field → accepted label variants
+    #   operation:        ["operation", "request type"]
+    #   affiliation_code: ["affiliation code"]
+    #   employee_code:    ["ffm application id", "ffm id", "employee code"]
+    #   user_email:       ["user email", "requester email", "email"]
+
+  # ── Bot-generated initial passwords (OFF by default) ──
+  # When true, provision tickets that carry NO password get a random
+  # per-user 8-char password generated by the connector (never a static
+  # shared one, never read from the description — client security decision).
+  # The password reaches the user only via the Step-11 credentials email.
+  generate_password: false
+
+  # ── Duplicate detection across tickets (2026-09-26) ──
+  # A ticket for the same operation + affiliation + employee as a request
+  # the platform already holds under ANOTHER ticket number (queued,
+  # running or done within this window) is not queued again. 0 = off.
+  duplicates:
+    window_days: 30
+
+  # ── Write-back to the ticket ──
+  # `enabled` gates the informational notes below (queued / duplicate).
+  writeback:
+    enabled: false
+    on_submit:
+      add_work_note: "Queued to FINESIII RPA bot (ticket {ticket_id})."
+    on_duplicate:
+      add_work_note: "Not processed by the FINESIII RPA bot: duplicate of {original_ticket_id}."
+    # Close-out after the mainframe step (2026-09-26). Each block has its
+    # own switch, overridable from the console's ServiceNow page.
+    # Placeholders: {ticket_id} {operation} {affiliation_code}
+    # {employee_code} {result_code} {completed_at} {request_id} {attempts}
+    # {error} {status}
+    on_success:
+      enabled: true
+      state: "3"                     # sc_task: 3 = Closed Complete
+      comment_provision: "Provisioning completed by the FINESIII RPA bot. Affiliation code {affiliation_code}, application ID {employee_code}. Completed {completed_at}."
+      comment_deprovision: "Deprovisioning completed by the FINESIII RPA bot. Affiliation code {affiliation_code}, application ID {employee_code}. Completed {completed_at}."
+      comment_certification: "Certification revocation completed by the FINESIII RPA bot. Affiliation code {affiliation_code}, account {employee_code}. Completed {completed_at}."
+    on_review:                       # deprovision: the account was already gone
+      enabled: true
+      add_work_note: "Human review required: the FINESIII account for application ID {employee_code} (affiliation {affiliation_code}) was already deleted. No change was made by the bot. Ticket left open."
+    on_failure:                      # retries exhausted; ticket stays open
+      enabled: true
+      add_work_note: "FINESIII RPA bot could not complete this request after {attempts} attempt(s). Error: {error}. Ticket left open for review."
+    on_unconfirmed:                  # the bot could not confirm the result
+      # Uses the on_review switch. The ticket stays open.
+      add_work_note: "Human review required: the FINESIII RPA bot submitted the {operation} for application ID {employee_code} (affiliation {affiliation_code}) but could not confirm the result on screen. Please verify in FINESIII. Ticket left open."
+    on_cancel:                       # request cancelled in the console
+      enabled: true
+      add_work_note: "Cancelled in the FINESIII RPA console by an operator. Nothing was changed in FINESIII. Ticket left open for review."
+    on_reject:                       # unmappable, invalid or duplicate ticket
+      # Assignment group (sys_id or name) that takes the ticket over.
+      # Blank = the ticket stays assigned to the bot (default).
+      reassign_group: ""
+      # Work note with the reason on a rejected ticket (2026-09-28),
+      # written whether or not `enabled` above is on. {reason}
+      # {ticket_id} are available.
+      enabled: true
+      add_work_note: "Not processed by the FINESIII RPA bot: {reason}. Ticket left open for review."
+
+  # ── Submission target: the v3 service API ──
+  service:
+    base_url_env: RPA_SERVICE_URL    # e.g. http://localhost:8000
+    base_url: "http://localhost:8000"   # fallback if env unset
+    submit_path: "/api/v1/requests"
+    status_path: "/api/v1/requests/{request_id}"
+    health_path: "/api/v1/health"
+    token_env: RPA_SERVICE_TOKEN     # sent as X-API-Key (and Bearer) when set
+
+  # ── Polling cadence ──
+  poll:
+    interval_seconds: 1800           # 30 minutes (console: SNOW_POLL_SECONDS)
+    respect_service_health: true     # skip a cycle if the RPA service is down
+
+  # ── Networking / resilience ──
+  network:
+    timeout_seconds: 30.0
+    max_retries: 4                   # for 429 / 5xx / transient network errors
+    backoff_base_seconds: 2.0
+    backoff_max_seconds: 60.0
+    verify_tls: true
